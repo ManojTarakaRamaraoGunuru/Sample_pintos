@@ -1,0 +1,254 @@
+			+--------------------+
+			|         OS         |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+
+---- GROUP ----
+
+>> Fill in the names, email addresses and matriculation numbers of your group members.
+
+Gunuru Manoj Taraka Ramarao <manoj.gtr@iitgn.ac.in> 19110085
+Krishna Mohan <krishna.mp@iitgn.ac.in> 19110130
+Ramireddy Lakshmi Nageshwari <lakshmi.nr@iitgn.ac.in> 19110097
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+    In case you get a wrong output in QEMU, please run make clean and then run make and then run pintos command.
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+    For timer.c we refered- https://github.com/Waqee/Pintos-Project-1
+    The other two files were implemented by us without any external reference.
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+    int64_t wake_ticks; (Added in struct thread in thread.h)
+    
+    This struct member was added to keep track of the ticks(global reference) at which the thread should wake up.
+
+    struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                          /* Thread identifier. */
+    enum thread_status status;          /* Thread state. */
+    char name[16];                      /* Name (for debugging purposes). */
+    uint8_t *stack;                     /* Saved stack pointer. */
+    int priority;                       /* Priority. */
+    struct list_elem allelem;           /* List element for all threads list. */
+    int64_t wake_ticks;                  // The ticks at which the thread should wake(Global Reference) Added by Me
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;              /* List element. */
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+
+  Another list was added to maintain the sleeping threads
+
+  struct list sleeping_threads;
+
+  Functions changed or added
+
+  void
+timer_init (void) 
+{
+  pit_configure_channel (0, 2, TIMER_FREQ);
+  intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&sleeping_threads);//Added By Me
+}
+
+static bool comp(const struct list_elem* a,const struct list_elem* b,void* aux)
+{
+  struct thread* l=list_entry(a,struct thread,elem);
+  struct thread* r=list_entry(b,struct thread,elem);
+  return (l->wake_ticks<r->wake_ticks);
+}
+
+void
+timer_sleep (int64_t ticks1) 
+{
+  //int64_t start = timer_ticks ();
+
+  ASSERT (intr_get_level () == INTR_ON);
+  // while (timer_elapsed (start) < ticks) 
+  //   thread_yield ();
+    if(ticks1<=0)
+    {
+      return;
+    }
+
+    struct thread* cur_thread=thread_current();
+    int64_t cur_ticks=timer_ticks();
+    cur_thread->wake_ticks=cur_ticks+ticks1;
+    intr_disable();
+    list_insert_ordered(&sleeping_threads,&cur_thread->elem,comp,NULL);
+    thread_block();
+    intr_enable();
+
+
+}
+
+static void
+timer_interrupt (struct intr_frame *args UNUSED)
+{
+  ticks++;
+  thread_tick ();
+  while(!list_empty(&sleeping_threads))
+  {
+    struct thread* temp=list_entry(list_front(&sleeping_threads),struct thread,elem);
+    if(timer_ticks()<temp->wake_ticks)
+    {
+      break;
+    }
+    list_pop_front(&sleeping_threads);
+    thread_unblock(temp);
+  }
+}
+
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+    The timer_sleep function puts the current thread to sleep for the given number of ticks(ticks parameter). We insert the current thread into a list(sleepingthreads) using the list_insert_ordered function based on its wake ticks and block it(sleep). The timer_interrupt function is called every tick. Here we check which thread to wake by traversing the sleepingthreads list. If the waketicks of a particular thread is less than the currentticks(global), we unblock. 
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+    Instead of checking whether every thread has to be woken, we insert the threads in sorted order and then traverse until we get a thread whose waketicks is greater than the currentticks. Since the list is sorted, we can break since 
+    all the elements to the right are greater.
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+    Race conditions are avoided since we disabled the interrupts before inserting the threads into the sleepingthreads list.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+    Race conditions won't occur because the interuppts are turned off whenever we push the thread into the list. 
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+    This design is better compared to the other designs(where we check the entire list at every call to timer_interrupt) as it is optimized and busy-waiting is avoided by adding all the sleeping threads into an ordered list which allows us to wake the required threads in the least time possible.
+
+    		     PROD/CONS
+	  		     =========
+
+---- SYNCHRONIZATION ----
+
+>> B1: How does your solution guarantee that consumers will hold until
+>> there is something to consume in the buffer?
+
+    Used a condition variable(c_cons) which calls condtional wait function, this will ensure that the consumer will waits
+    till at least one item was produced.
+
+>> B2: How does your solution guarantee that producers will hold until
+>> there is some free space in the buffer?
+
+    Used a condition variable(c_prod) which calls condtional wait function, this will ensure that the produceer will waits
+    till at least one space is there in shared buffer.
+
+
+>> B3: How does your solution preserve a FIFO semantics i.e., the first
+>> character produced will be the first to be consumed?
+
+    We maintained two shared global variables(add, rem). Both add and remove iterators will give an intution of circular queue push and pop operations.
+
+---- RATIONALE ----
+
+>> B4: Give an intuition for why your program preserves safety.
+
+    We used mutexes when accesing the shared resources and condition variables to avoid base case violations such as when buffer is empty, consumer trying to consume and when buffer is full producer trying to put in the buffer.
+
+>> B5: Why did you choose this design? Did you consider other design
+>> alternatives? In what ways is it superior to another design you considered?
+
+    This is the only design that we came up with.
+
+
+			     NARROW BRIDGE
+			     =============
+
+---- SYNCHRONIZATION ----
+
+>> C1: How does your solution guarantee that no more that 3 vehicles
+>> are crossing the bridge in the same direction?
+
+    We used a semaphore(cap) to ensure not mpre than 3 vehicles.
+    To ensure the same direction we fixed the  traffic direction (Emergency left, Emergency Right, Normal left and Normal right).
+    The vechiles were allowed to proceed in the above given order.
+
+>> C2: What prevents vehicles from opposite directions from crossing the
+>> bridge simultaneously?
+
+    First, We gave prefernce to emergency vehicles and then to normal vehicles.
+    Whenver we pick a particular direction, we make sure that all the vehicles in that particular direction exit the bridge before vehicles of any other direction enter.
+
+>> C3: How does your solution grant priority to emergency vehicles over
+>> the queue of vehicles ahead in the same direction?
+
+    We have used 2 shared global variables(tot_emer, emer_left), we stopped passing normal vehicles till all the emergency vehicles exit.
+
+>> C4: How do you guarantee that despite having priority, emergency vehicles
+>> do not start crossing the bridge while there are still vehicles crossing
+>> it in the oposite direction?
+
+    We already fixed a pre determined order(Emergency left, Emergency Right, Normal left and Normal right) for entering the bridge. This ensures no clashes.
+
+>> C5: Explain with examples why your solution does not preserve neither
+>> fairness nor freedom from starvation, other than what has been indicated
+>> for emergency vehicles.
+
+    Emergency vehicles were given more priority than normal vehicles. All the vehicles of particular class were created with same priority. All the vechiles will exit, this will ensure there is no starvation.
+
+---- RATIONALE ----
+
+>> C6: Why did you choose this design? Did you consider other design
+>> alternatives? In what ways is it superior to another design you considered?
+
+    We tried to implement using lists but we were not able to formaulate a proper solution(errors due to the complexity of code).
+
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future semesters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future semesters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future semesters or the remaining projects?
+
+>> Any other comments?
